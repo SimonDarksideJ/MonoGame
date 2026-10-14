@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build-linux:
     name: Build
-    uses: ./.github/workflows/_build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       runner: ubuntu-24.04
       profile: full
@@ -32,7 +32,7 @@ jobs:
 
   build-windows:
     name: Build
-    uses: ./.github/workflows/_build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       runner: windows-2022
       profile: full
@@ -42,7 +42,7 @@ jobs:
 
   build-macos:
     name: Build
-    uses: ./.github/workflows/_build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       runner: macos-26
       profile: full
@@ -52,7 +52,7 @@ jobs:
 
   natives-linux-arm64:
     name: Build
-    uses: ./.github/workflows/_build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       runner: ubuntu-24.04-arm
       profile: natives
@@ -62,7 +62,7 @@ jobs:
   tests-linux:
     name: Test
     needs: build-linux
-    uses: ./.github/workflows/_test.yml
+    uses: ./.github/workflows/reusable-test.yml
     with:
       runner: ubuntu-24.04
       runner-class: hosted-linux
@@ -73,7 +73,7 @@ jobs:
   tests-linux-arm64:
     name: Test
     needs: build-linux
-    uses: ./.github/workflows/_test.yml
+    uses: ./.github/workflows/reusable-test.yml
     with:
       runner: ubuntu-24.04-arm
       runner-class: hosted-linux-arm64
@@ -84,7 +84,7 @@ jobs:
   tests-windows:
     name: Test
     needs: build-windows
-    uses: ./.github/workflows/_test.yml
+    uses: ./.github/workflows/reusable-test.yml
     with:
       runner: windows-2022
       runner-class: hosted-windows
@@ -95,7 +95,7 @@ jobs:
   tests-macos:
     name: Test
     needs: build-macos
-    uses: ./.github/workflows/_test.yml
+    uses: ./.github/workflows/reusable-test.yml
     with:
       runner: macos-26
       runner-class: hosted-macos
@@ -107,7 +107,7 @@ jobs:
     name: Test (hardware)
     needs: build-windows
     if: vars.MG_ENABLE_HARDWARE_TIER == 'true'
-    uses: ./.github/workflows/_test.yml
+    uses: ./.github/workflows/reusable-test.yml
     with:
       runner: windows-selfhosted-latest
       runner-class: selfhosted-windows
@@ -120,7 +120,7 @@ jobs:
     name: Test (hardware)
     needs: build-macos
     if: vars.MG_ENABLE_HARDWARE_TIER == 'true'
-    uses: ./.github/workflows/_test.yml
+    uses: ./.github/workflows/reusable-test.yml
     with:
       runner: macos-selfhosted-15
       runner-class: selfhosted-macos
@@ -132,7 +132,7 @@ jobs:
   pack:
     name: Pack
     needs: [build-linux, build-windows, build-macos, natives-linux-arm64]
-    uses: ./.github/workflows/_pack.yml
+    uses: ./.github/workflows/reusable-pack.yml
     with:
       version: 0.0.0-nightly.${{ github.run_number }}
       stable: false

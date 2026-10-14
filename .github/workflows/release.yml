@@ -79,8 +79,8 @@ jobs:
           exit 1
 
       # Phase D and E will add, in order:
-      #   build or reuse   _build.yml for the chosen commit, or download its merge-lane artifacts
-      #   pack             _pack.yml with version and stable=true for X.Y.Z
+      #   build or reuse   reusable-build.yml for the chosen commit, or download its merge-lane artifacts
+      #   pack             reusable-pack.yml with version and stable=true for X.Y.Z
       #   validate         runtimes present, dependency rules, symbols, template new/build/run, AOT publish
       #   dry-run          staging feed push, draft release with assets, manifest diff against last release
       #   publish          environment: nuget-org (required reviewers); nuget.org, GitHub Packages, release,

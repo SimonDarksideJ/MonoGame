@@ -1,0 +1,104 @@
+name: reusable-test
+
+# Reusable test block (Phase A of the automation rebuild).
+#
+# One job per backend. It downloads that backend's test payload from the build job, then runs every
+# suite that Tests/ci-manifest.json assigns to the requested tiers on this runner class. Which suite runs
+# where is data in the manifest, not YAML here (baseline report, R-3). Results (NUnit XML or TRX) and any
+# captured frames or diffs are uploaded on every outcome so a failure can be read without the raw log.
+#
+# The job never checks out the source tree: the payload is a prebuilt artifact, so only the scripts and
+# the manifest are fetched.
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner label.
+        type: string
+        required: true
+      runner-class:
+        description: hosted-linux | hosted-linux-arm64 | hosted-windows | hosted-macos | selfhosted-windows | selfhosted-macos
+        type: string
+        required: true
+      tiers:
+        description: JSON array of manifest tiers to run on this runner class.
+        type: string
+        default: '["fast", "windowed"]'
+      backends:
+        description: JSON array of backends; one job per backend.
+        type: string
+        required: true
+      payload-suffix:
+        description: The <os>-<arch> suffix of the build job whose payloads to download, e.g. linux-x64.
+        type: string
+        required: true
+      timeout-minutes:
+        description: Job timeout. A hung test must never hold a runner for the six-hour default.
+        type: number
+        default: 30
+
+env:
+  DotnetRuntimeVersion: 8.0.x
+
+jobs:
+  test:
+    name: ${{ matrix.backend }} on ${{ inputs.runner-class }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: ${{ fromJSON(inputs.backends) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout scripts and manifest only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/scripts
+            Tests/ci-manifest.json
+          sparse-checkout-cone-mode: false
+
+      - name: Setup .NET runtime
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: ${{ env.DotnetRuntimeVersion }}
+
+      - name: Install display and software GPU drivers (hosted Linux)
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libgl1 mesa-vulkan-drivers
+
+      - name: Download test payload
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tests-${{ matrix.backend }}-${{ inputs.payload-suffix }}
+          path: payload
+
+      - name: Run suites from the manifest
+        run: bash .github/scripts/run-tests.sh
+        env:
+          MANIFEST: Tests/ci-manifest.json
+          BACKEND: ${{ matrix.backend }}
+          RUNNER_CLASS: ${{ inputs.runner-class }}
+          TIERS: ${{ inputs.tiers }}
+          PAYLOAD_DIR: payload
+          RESULTS_DIR: TestResults
+
+      - name: Upload results and failure artefacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-${{ matrix.backend }}-${{ inputs.runner-class }}
+          path: |
+            TestResults/**
+            payload/CapturedFrames/**
+            payload/Diffs/**
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,259 @@
+name: reusable-build
+
+# Reusable build block (Phase A of the automation rebuild).
+#
+# One job: check out, install the toolchain, run the Cake targets for the requested profile and upload
+# one artifact per output family with short retention. Lane workflows (pr.yml, ci.yml, nightly.yml)
+# compose it. It owns no triggers, secrets or runner policy, and it never targets a self-hosted machine.
+#
+# Profiles map to the Cake targets that exist today. The split into separate shaders / natives / managed
+# jobs (baseline report, section 5.2) needs new Cake targets and arrives in Phase B.
+#   full     Default (Build All): shaders, natives, frameworks, tools, templates and test payloads
+#   natives  Build Shaders, Build Native, Build Content Pipeline (what main.yml ran on Linux arm64)
+#
+# Artifacts produced (all named <family>-<os>-<arch>):
+#   native-*          Artifacts/native/**            mgruntime and mgpipeline libraries
+#   managed-*         Artifacts/MonoGame.Framework/** compiled framework assemblies (full only)
+#   nuget-*, vsix-*   packages (full + upload-packages only; merge and nightly lanes)
+#   tests-<backend>-* Artifacts/Tests/<Backend>/Release  test payloads consumed by reusable-test.yml (full only)
+#   test-results-tools-*  TRX from the tools tests (run-tools-tests only)
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner label. Hosted images only in this phase.
+        type: string
+        required: true
+      profile:
+        description: full | natives
+        type: string
+        default: full
+      run-tools-tests:
+        description: Run Tools/MonoGame.Tools.Tests after the build (content pipeline, mgcb, effects).
+        type: boolean
+        default: false
+      upload-packages:
+        description: Upload the NuGet packages and VSIX this job produced.
+        type: boolean
+        default: false
+      retention-days:
+        description: Artifact retention. Intermediate outputs do not need the 90-day default.
+        type: number
+        default: 7
+      timeout-minutes:
+        type: number
+        default: 60
+
+env:
+  DotnetVersion: 9.0.314
+  XCodeVersion: '26.3'
+
+jobs:
+  build:
+    name: ${{ inputs.profile }} on ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Free disk space
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          android: false
+          dotnet: false
+          docker-images: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Compute artifact name suffix
+        id: slug
+        run: |
+          case "$RUNNER_OS" in
+            Linux) os=linux ;;
+            macOS) os=macos ;;
+            *)     os=windows ;;
+          esac
+          case "$RUNNER_ARCH" in
+            ARM64) arch=arm64 ;;
+            *)     arch=x64 ;;
+          esac
+          {
+            echo "os=$os"
+            echo "arch=$arch"
+            echo "suffix=$os-$arch"
+          } >> "$GITHUB_OUTPUT"
+          echo "artifact suffix: $os-$arch"
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          dotnet-version: ${{ env.DotnetVersion }}
+          workloads: ${{ inputs.profile == 'full' && ((runner.os == 'Windows' && 'android ios') || (runner.os == 'macOS' && 'macos ios') || (runner.os == 'Linux' && runner.arch == 'X64' && 'android') || '') || '' }}
+          android-dependencies: ${{ inputs.profile == 'full' && runner.arch != 'ARM64' }}
+          java: ${{ inputs.profile == 'full' && runner.arch != 'ARM64' }}
+          premake: 'true'
+          vulkan: 'true'
+          msbuild: ${{ runner.os == 'Windows' }}
+          xcode-version: ${{ runner.os == 'macOS' && env.XCodeVersion || '' }}
+
+      - name: Disable csc annotations
+        run: echo "::remove-matcher owner=csc::"
+
+      # Shaders are still compiled on every build host, so every host still needs Wine off Windows.
+      # Phase B compiles shaders once on Windows and drops the Wine step from the other jobs.
+      - name: Setup Wine
+        if: runner.os != 'Windows'
+        uses: monogame/monogame-actions/install-wine@0ab47bc75306763317a7cbc9ee70804314e50257 # v1.0.3
+
+      - name: Install fonts
+        uses: monogame/monogame-actions/install-fonts@0ab47bc75306763317a7cbc9ee70804314e50257 # v1.0.3
+
+      - name: Export MGFXC_WINE_PATH
+        if: runner.os != 'Windows'
+        run: echo "MGFXC_WINE_PATH=${HOME}/.winemonogame" >> "$GITHUB_ENV"
+
+      - name: Install SDL2 build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libpulse-dev libaudio-dev libjack-jackd2-dev libsndio-dev libsamplerate0-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev \
+            libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev \
+            libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev libudev-dev fcitx-libs-dev \
+            libpipewire-0.3-dev libdecor-0-dev
+
+      - name: Restore VS extension project (Windows)
+        if: runner.os == 'Windows' && inputs.profile == 'full'
+        run: dotnet restore Templates/MonoGame.Templates.VSExtension
+
+      - name: Build (full)
+        if: inputs.profile == 'full'
+        run: dotnet run --project build/Build.csproj -- --target=Default
+        env:
+          CI: true
+          # Android compilation downloads from Microsoft during the build and fails randomly on revocation checks.
+          DOTNET_SYSTEM_NET_SECURITY_NOREVOCATIONCHECKBYDEFAULT: 1
+
+      - name: Build (natives)
+        if: inputs.profile == 'natives'
+        run: |
+          dotnet run --project build/Build.csproj -- --target="Build Shaders"
+          dotnet run --project build/Build.csproj -- --target="Build Native"
+          dotnet run --project build/Build.csproj -- --target="Build Content Pipeline"
+        env:
+          CI: true
+          DOTNET_SYSTEM_NET_SECURITY_NOREVOCATIONCHECKBYDEFAULT: 1
+
+      - name: Tools tests
+        if: inputs.run-tools-tests && inputs.profile == 'full'
+        run: |
+          filter=""
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            filter="--filter=TestCategory!=Audio"
+          fi
+          dotnet test Tools/MonoGame.Tools.Tests/MonoGame.Tools.Tests.csproj -c Release \
+            --blame-hang-timeout 5m $filter \
+            --logger "trx;LogFileName=tools-tests.trx" --results-directory Artifacts/TestResults
+        env:
+          CI: true
+          DisableNativeBuild: true
+
+      - name: Upload tools test results
+        if: always() && inputs.run-tools-tests && inputs.profile == 'full'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-tools-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/TestResults/**
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload native libraries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/native/**
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload managed framework outputs
+        if: inputs.profile == 'full'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: managed-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/MonoGame.Framework/**
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload NuGet packages
+        if: inputs.upload-packages && inputs.profile == 'full'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nuget-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/NuGet/*.nupkg
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload VSIX
+        if: inputs.upload-packages && inputs.profile == 'full' && runner.os == 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vsix-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/MonoGame.Templates.VSExtension/net472/MonoGame.Templates.VSExtension.vsix
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload test payload (DesktopGL)
+        if: inputs.profile == 'full'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-desktopgl-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/Tests/DesktopGL/Release/**
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload test payload (DesktopGL4)
+        if: inputs.profile == 'full'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-desktopgl4-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/Tests/DesktopGL4/Release/**
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload test payload (DesktopVK)
+        if: inputs.profile == 'full'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-desktopvk-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/Tests/DesktopVK/Release/**
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload test payload (WindowsDX)
+        if: inputs.profile == 'full' && runner.os == 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-windowsdx-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/Tests/WindowsDX/Release/**
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload test payload (WindowsDX12)
+        if: inputs.profile == 'full' && runner.os == 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-windowsdx12-${{ steps.slug.outputs.suffix }}
+          path: Artifacts/Tests/WindowsDX12/Release/**
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

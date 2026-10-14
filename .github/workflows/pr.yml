@@ -7,9 +7,9 @@ name: PR
 #
 #   changes            classifies the diff; a docs-only change skips the build entirely
 #   lint-workflows     actionlint over .github/workflows
-#   build-*            full Cake build per hosted image (_build.yml)
+#   build-*            full Cake build per hosted image (reusable-build.yml)
 #   natives-linux-arm64  native libraries only, skipped when neither native/** nor the build changed
-#   tests-*            fast and windowed tiers from Tests/ci-manifest.json (_test.yml)
+#   tests-*            fast and windowed tiers from Tests/ci-manifest.json (reusable-test.yml)
 #   PR                 the aggregate status
 #
 # Targets from the baseline report (section 5.3): under 20 minutes, no PR waits on a self-hosted machine.
@@ -84,7 +84,7 @@ jobs:
     name: Build
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    uses: ./.github/workflows/_build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       runner: ubuntu-24.04
       profile: full
@@ -94,7 +94,7 @@ jobs:
     name: Build
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    uses: ./.github/workflows/_build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       runner: windows-2022
       profile: full
@@ -104,7 +104,7 @@ jobs:
     name: Build
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    uses: ./.github/workflows/_build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       runner: macos-26
       profile: full
@@ -114,7 +114,7 @@ jobs:
     name: Build
     needs: changes
     if: needs.changes.outputs.code == 'true' && (needs.changes.outputs.native == 'true' || needs.changes.outputs.build == 'true')
-    uses: ./.github/workflows/_build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       runner: ubuntu-24.04-arm
       profile: natives
@@ -123,7 +123,7 @@ jobs:
   tests-linux:
     name: Test
     needs: build-linux
-    uses: ./.github/workflows/_test.yml
+    uses: ./.github/workflows/reusable-test.yml
     with:
       runner: ubuntu-24.04
       runner-class: hosted-linux
@@ -134,7 +134,7 @@ jobs:
   tests-linux-arm64:
     name: Test
     needs: build-linux
-    uses: ./.github/workflows/_test.yml
+    uses: ./.github/workflows/reusable-test.yml
     with:
       runner: ubuntu-24.04-arm
       runner-class: hosted-linux-arm64
@@ -145,7 +145,7 @@ jobs:
   tests-windows:
     name: Test
     needs: build-windows
-    uses: ./.github/workflows/_test.yml
+    uses: ./.github/workflows/reusable-test.yml
     with:
       runner: windows-2022
       runner-class: hosted-windows
