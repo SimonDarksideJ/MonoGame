@@ -84,6 +84,7 @@ selected="$(jq -c --arg b "$BACKEND" --arg class "$RUNNER_CLASS" --argjson tiers
   | select(($tiers | index($t)) != null)
   | select((.backends | index($b)) != null)
   | select(((.runners // []) | length) == 0 or ((.runners // []) | index($class)) != null)
+  | select(((.["exclude-runners"] // []) | index($class)) == null)
   | select(((.skip // []) | index($os)) == null and ((.skip // []) | index($arch)) == null)
 ' "$MANIFEST")" || { echo "::error::Failed to query $MANIFEST"; exit 1; }
 

@@ -9,13 +9,16 @@
     "device: self-hosted only), quarantine (known broken; never run, listed so it is not forgotten).",
     "Runner classes: hosted-linux, hosted-linux-arm64, hosted-windows, hosted-macos, selfhosted-windows, selfhosted-macos.",
     "Suite fields: id, tier, backends, reason, and one of test (NUnitLite --test), where (NUnitLite --where) or filter",
-    "(dotnet test --filter when runner is dotnet-test); optional runners (restrict to classes), skip (os or arch names),",
-    "timeout (ms, default 300000), labels (NUnitLite --labels)."
+    "(dotnet test --filter when runner is dotnet-test); optional runners (allow-list of classes), exclude-runners",
+    "(deny-list of classes), skip (os or arch names), timeout (ms, default 300000), labels (NUnitLite --labels).",
+    "Backend fields: payload, os (allow-list), skip (arch names). Native backends (desktopgl4, desktopvk) skip arm64",
+    "because the Linux test payloads are built on x64 and carry x64 mgruntime only; arm64 payloads need the arm64",
+    "native build wired into the test lane (Phase B/C)."
   ],
   "backends": {
     "desktopgl":   { "description": "Managed SDL2 + OpenGL (MojoShader)", "payload": "tests-desktopgl" },
     "desktopgl4":  { "description": "Native OpenGL runtime",               "payload": "tests-desktopgl4", "skip": ["arm64"] },
-    "desktopvk":   { "description": "Native Vulkan runtime",               "payload": "tests-desktopvk" },
+    "desktopvk":   { "description": "Native Vulkan runtime",               "payload": "tests-desktopvk",  "skip": ["arm64"] },
     "windowsdx":   { "description": "Managed DirectX 11",                  "payload": "tests-windowsdx",   "os": ["windows"] },
     "windowsdx12": { "description": "Native DirectX 12",                   "payload": "tests-windowsdx12", "os": ["windows"] }
   },
@@ -23,7 +26,8 @@
     {
       "id": "framework-core", "tier": "fast", "backends": ["desktopgl"],
       "test": "MonoGame.Tests.Framework", "where": "Category != Audio && Category != GameTest",
-      "reason": "Core, maths, content and Game-class unit tests need no device. main.yml ran these on hosted Linux and the self-hosted machines; hosted Windows is new coverage to measure."
+      "exclude-runners": ["hosted-windows"],
+      "reason": "Core, maths, content and Game-class unit tests need no device, except GameComponentTest.InitializeOrderTest which creates one. Measured on hosted Windows (run 38567307917): 380/381 pass, the one failure is NoSuitableGraphicsDeviceException because the hosted Windows image has no OpenGL driver beyond 1.1. Excluded there until Phase C provides Mesa llvmpipe (opengl32.dll) for DesktopGL on Windows."
     },
     {
       "id": "storage", "tier": "windowed", "backends": ["desktopvk", "desktopgl4", "windowsdx12"],
@@ -38,12 +42,14 @@
     {
       "id": "visual", "tier": "windowed", "backends": ["desktopgl"],
       "test": "MonoGame.Tests.Visual",
-      "reason": "Frame-capture tests against a software renderer. Ran on every test runner in main.yml."
+      "exclude-runners": ["hosted-windows"],
+      "reason": "Frame-capture tests that need an OpenGL context. Pass (or are ignored) on hosted Linux with Mesa; on hosted Windows the one live test fails with NoSuitableGraphicsDeviceException (no OpenGL driver on the image). Excluded there until Phase C provides Mesa llvmpipe for DesktopGL on Windows."
     },
     {
       "id": "gametest", "tier": "windowed", "backends": ["desktopgl"],
       "where": "Category == GameTest",
-      "reason": "Runs a Game loop in a window. main.yml ran it on hosted Linux and self-hosted only; hosted Windows is new coverage to measure."
+      "exclude-runners": ["hosted-windows"],
+      "reason": "Runs a Game loop in a window with an OpenGL context. 46 pass / 13 skipped on hosted Linux. On hosted Windows the process dies with an AccessViolationException (no OpenGL driver on the image), which is why main.yml never ran it there. Excluded until Phase C provides Mesa llvmpipe for DesktopGL on Windows."
     },
 
     {

@@ -72,32 +72,15 @@ runs:
         distribution: microsoft
         java-version: '17'
 
+    # Premake is only needed on the host for Windows and macOS. On Linux the Cake build runs premake5, make
+    # and cmake inside the steamrt Docker image (build/Utils/ProcessDockerExtensions.cs) whenever CI=true and
+    # Docker is present, which is always the case on hosted runners. The legacy workflow built Premake from
+    # source on arm64 for nothing (report K-16); on ubuntu-24.04-arm that build also fails for lack of uuid-dev.
     - name: Setup Premake 5
-      if: inputs.premake == 'true' && (runner.os != 'Linux' || runner.arch != 'ARM64')
+      if: inputs.premake == 'true' && runner.os != 'Linux'
       uses: abel0b/setup-premake@b80dc6f70e8ab159fb854bdadbeb1a53cfc28723 # v2.4
       with:
         version: 5.0.0-beta2
-
-    - name: Restore cached Premake 5 (Linux arm64)
-      if: inputs.premake == 'true' && runner.os == 'Linux' && runner.arch == 'ARM64'
-      id: premake-cache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ github.workspace }}/premake-core/bin/release
-        key: premake-${{ runner.os }}-${{ runner.arch }}-source-v1
-
-    - name: Build Premake 5 from source (Linux arm64)
-      if: inputs.premake == 'true' && runner.os == 'Linux' && runner.arch == 'ARM64' && steps.premake-cache.outputs.cache-hit != 'true'
-      shell: bash
-      run: |
-        git clone --depth 1 https://github.com/premake/premake-core.git "${GITHUB_WORKSPACE}/premake-core"
-        cd "${GITHUB_WORKSPACE}/premake-core"
-        ./Bootstrap.sh
-
-    - name: Add Premake 5 to PATH (Linux arm64)
-      if: inputs.premake == 'true' && runner.os == 'Linux' && runner.arch == 'ARM64'
-      shell: bash
-      run: echo "${GITHUB_WORKSPACE}/premake-core/bin/release" >> "$GITHUB_PATH"
 
     - name: Install Vulkan SDK (headers and loader)
       if: inputs.vulkan == 'true' && runner.os != 'macOS'
