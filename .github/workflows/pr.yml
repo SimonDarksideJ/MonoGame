@@ -1,0 +1,182 @@
+name: PR
+
+# Pull request lane (Phase A of the automation rebuild).
+#
+# Hosted runners only. No self-hosted machine, no publishing secret, no package publish. The single
+# required check is the "PR" status job at the bottom, which aggregates everything else.
+#
+#   changes            classifies the diff; a docs-only change skips the build entirely
+#   lint-workflows     actionlint over .github/workflows
+#   build-*            full Cake build per hosted image (reusable-build.yml)
+#   natives-linux-arm64  native libraries only, skipped when neither native/** nor the build changed
+#   tests-*            fast and windowed tiers from Tests/ci-manifest.json (reusable-test.yml)
+#   PR                 the aggregate status
+#
+# Targets from the baseline report (section 5.3): under 20 minutes, no PR waits on a self-hosted machine.
+# The build jobs still run the monolithic Cake Default target until Phase B splits it, so the first
+# shadow runs will be slower than the target; their timings are the baseline for Phase B.
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - 'release/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      docs-only: ${{ steps.classify.outputs.docs-only }}
+      native: ${{ steps.classify.outputs.native }}
+      build: ${{ steps.classify.outputs.build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Classify
+        id: classify
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "$BASE" "$HEAD"
+            bash .github/scripts/classify-changes.sh "$BASE" "$HEAD"
+          else
+            # Manual dispatch: there is no diff to classify, run everything.
+            {
+              echo "docs-only=false"
+              echo "code=true"
+              echo "native=true"
+              echo "build=true"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+  lint-workflows:
+    name: Lint workflows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The legacy main.yml still uses ::set-output (K-20); it is kept intact for comparison, so that one
+      # message is ignored until the file is deleted in Phase F.
+      - name: actionlint
+        run: >-
+          docker run --rm -v "${PWD}:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
+          -ignore 'workflow command "set-output" was deprecated'
+
+  build-linux:
+    name: Build
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      runner: ubuntu-24.04
+      profile: full
+      run-tools-tests: true
+
+  build-windows:
+    name: Build
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      runner: windows-2022
+      profile: full
+      run-tools-tests: true
+
+  build-macos:
+    name: Build
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      runner: macos-26
+      profile: full
+      run-tools-tests: false
+
+  natives-linux-arm64:
+    name: Build
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && (needs.changes.outputs.native == 'true' || needs.changes.outputs.build == 'true')
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      runner: ubuntu-24.04-arm
+      profile: natives
+      timeout-minutes: 45
+
+  tests-linux:
+    name: Test
+    needs: build-linux
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      runner: ubuntu-24.04
+      runner-class: hosted-linux
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopgl4", "desktopvk"]'
+      payload-suffix: linux-x64
+
+  tests-linux-arm64:
+    name: Test
+    needs: build-linux
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      runner: ubuntu-24.04-arm
+      runner-class: hosted-linux-arm64
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopvk"]'
+      payload-suffix: linux-x64
+
+  tests-windows:
+    name: Test
+    needs: build-windows
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      runner: windows-2022
+      runner-class: hosted-windows
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopgl4", "desktopvk", "windowsdx12"]'
+      payload-suffix: windows-x64
+
+  pr-status:
+    name: PR
+    if: always()
+    needs:
+      - changes
+      - lint-workflows
+      - build-linux
+      - build-windows
+      - build-macos
+      - natives-linux-arm64
+      - tests-linux
+      - tests-linux-arm64
+      - tests-windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Evaluate required jobs
+        shell: bash
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if echo "$RESULTS" | jq -e '[.[] | .result] | any(. == "failure" or . == "cancelled")' > /dev/null; then
+            echo "::error::One or more jobs in the PR lane failed or were cancelled."
+            exit 1
+          fi
+          echo "PR lane green (skipped jobs are allowed: docs-only changes and unchanged natives)."

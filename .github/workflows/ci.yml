@@ -1,0 +1,178 @@
+name: CI
+
+# Merge lane (Phase A of the automation rebuild). Runs on every push to develop and release branches.
+#
+# Full build on the four hosted images with packages kept as artifacts, then the fast and windowed test
+# tiers on hosted Linux, Linux arm64, Windows and macOS. Nothing is published from this lane yet; the
+# develop feed publish is Phase D work and will sit behind its own GitHub Environment.
+#
+# Stage toggles (repository variables, Settings > Secrets and variables > Actions > Variables):
+#   MG_ENABLE_HARDWARE_TIER = true   also run the hardware tier on the self-hosted machines
+#   MG_ENABLE_PACK          = true   also run the reusable-pack.yml block (gathers outputs, writes a manifest)
+# Both are off until that stage of the test is reached, so the lane stays hosted-only by default.
+
+on:
+  push:
+    branches:
+      - develop
+      - 'release/**'
+    paths-ignore:
+      - '**.md'
+      - 'Images/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - '.github/FUNDING.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-linux:
+    name: Build
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      runner: ubuntu-24.04
+      profile: full
+      run-tools-tests: true
+      upload-packages: true
+
+  build-windows:
+    name: Build
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      runner: windows-2022
+      profile: full
+      run-tools-tests: true
+      upload-packages: true
+
+  build-macos:
+    name: Build
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      runner: macos-26
+      profile: full
+      run-tools-tests: false
+      upload-packages: true
+
+  natives-linux-arm64:
+    name: Build
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      runner: ubuntu-24.04-arm
+      profile: natives
+      timeout-minutes: 45
+
+  tests-linux:
+    name: Test
+    needs: build-linux
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      runner: ubuntu-24.04
+      runner-class: hosted-linux
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopgl4", "desktopvk"]'
+      payload-suffix: linux-x64
+
+  tests-linux-arm64:
+    name: Test
+    needs: build-linux
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      runner: ubuntu-24.04-arm
+      runner-class: hosted-linux-arm64
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopvk"]'
+      payload-suffix: linux-x64
+
+  tests-windows:
+    name: Test
+    needs: build-windows
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      runner: windows-2022
+      runner-class: hosted-windows
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopgl4", "desktopvk", "windowsdx12"]'
+      payload-suffix: windows-x64
+
+  tests-macos:
+    name: Test
+    needs: build-macos
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      runner: macos-26
+      runner-class: hosted-macos
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopgl4", "desktopvk"]'
+      payload-suffix: macos-arm64
+
+  # Hardware tier: driver-level graphics and audio on the self-hosted machines. Off by default.
+  tests-hardware-windows:
+    name: Test (hardware)
+    needs: build-windows
+    if: vars.MG_ENABLE_HARDWARE_TIER == 'true'
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      runner: windows-selfhosted-latest
+      runner-class: selfhosted-windows
+      tiers: '["hardware"]'
+      backends: '["desktopgl", "desktopvk", "windowsdx", "windowsdx12"]'
+      payload-suffix: windows-x64
+      timeout-minutes: 45
+
+  tests-hardware-macos:
+    name: Test (hardware)
+    needs: build-macos
+    if: vars.MG_ENABLE_HARDWARE_TIER == 'true'
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      runner: macos-selfhosted-15
+      runner-class: selfhosted-macos
+      tiers: '["hardware"]'
+      backends: '["desktopgl", "desktopvk"]'
+      payload-suffix: macos-arm64
+      timeout-minutes: 45
+
+  # Packaging: gathers every build output and writes the manifest. Off by default; Phase D fills it in.
+  pack:
+    name: Pack
+    needs: [build-linux, build-windows, build-macos, natives-linux-arm64]
+    if: vars.MG_ENABLE_PACK == 'true'
+    uses: ./.github/workflows/reusable-pack.yml
+    with:
+      version: 0.0.0-ci.${{ github.run_number }}
+      stable: false
+
+  ci-status:
+    name: CI
+    if: always()
+    needs:
+      - build-linux
+      - build-windows
+      - build-macos
+      - natives-linux-arm64
+      - tests-linux
+      - tests-linux-arm64
+      - tests-windows
+      - tests-macos
+      - tests-hardware-windows
+      - tests-hardware-macos
+      - pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Evaluate jobs
+        shell: bash
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if echo "$RESULTS" | jq -e '[.[] | .result] | any(. == "failure" or . == "cancelled")' > /dev/null; then
+            echo "::error::One or more jobs in the merge lane failed or were cancelled."
+            exit 1
+          fi

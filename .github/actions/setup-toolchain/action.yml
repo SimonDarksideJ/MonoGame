@@ -1,0 +1,108 @@
+name: Setup toolchain
+description: >-
+  The one place the build toolchain is pinned. Installs the .NET SDK (and optional workloads), Java,
+  Premake, the Vulkan SDK, MSBuild and Xcode. Every component is opt-in so a job installs only what it
+  needs. Bump a version here and every lane picks it up.
+
+inputs:
+  dotnet-version:
+    description: .NET SDK version written to global.json and installed.
+    default: '9.0.314'
+  workloads:
+    description: Space-separated .NET workloads to install (android, ios, macos). Empty installs none.
+    default: ''
+  android-dependencies:
+    description: Install the Android SDK/NDK pieces the Android workload needs.
+    default: 'false'
+  java:
+    description: Install Java 17 (needed by the Android build).
+    default: 'false'
+  premake:
+    description: Install Premake 5 (built from source on Linux arm64, cached).
+    default: 'false'
+  vulkan:
+    description: Install the Vulkan SDK (headers and loader; full SDK on macOS).
+    default: 'false'
+  vulkan-version:
+    description: Vulkan SDK version.
+    default: '1.4.309.0'
+  msbuild:
+    description: Put MSBuild on PATH (Windows only, needed for the VSIX).
+    default: 'false'
+  xcode-version:
+    description: Xcode version to select on macOS. Empty leaves the image default.
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Generate global.json
+      shell: bash
+      run: |
+        echo '{ "sdk": { "version": "${{ inputs.dotnet-version }}" } }' > global.json
+        echo "runner.os=${{ runner.os }} runner.arch=${{ runner.arch }}"
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      with:
+        dotnet-version: ${{ inputs.dotnet-version }}
+        global-json-file: ./global.json
+
+    - name: Cache NuGet packages
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets') }}
+        restore-keys: |
+          nuget-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install .NET workloads (${{ inputs.workloads }})
+      if: inputs.workloads != ''
+      shell: bash
+      run: dotnet workload install ${{ inputs.workloads }} --version ${{ inputs.dotnet-version }}
+
+    - name: Install Android dependencies
+      if: inputs.android-dependencies == 'true'
+      uses: monogame/monogame-actions/install-android-dependencies@0ab47bc75306763317a7cbc9ee70804314e50257 # v1.0.3
+
+    - name: Setup Java 17
+      if: inputs.java == 'true'
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      with:
+        distribution: microsoft
+        java-version: '17'
+
+    # Premake is only needed on the host for Windows and macOS. On Linux the Cake build runs premake5, make
+    # and cmake inside the steamrt Docker image (build/Utils/ProcessDockerExtensions.cs) whenever CI=true and
+    # Docker is present, which is always the case on hosted runners. The legacy workflow built Premake from
+    # source on arm64 for nothing (report K-16); on ubuntu-24.04-arm that build also fails for lack of uuid-dev.
+    - name: Setup Premake 5
+      if: inputs.premake == 'true' && runner.os != 'Linux'
+      uses: abel0b/setup-premake@b80dc6f70e8ab159fb854bdadbeb1a53cfc28723 # v2.4
+      with:
+        version: 5.0.0-beta2
+
+    - name: Install Vulkan SDK (headers and loader)
+      if: inputs.vulkan == 'true' && runner.os != 'macOS'
+      uses: humbletim/setup-vulkan-sdk@c25f41106918cde0bf347e6f201277392b3a9e9d # v1.2.1
+      with:
+        vulkan-query-version: ${{ inputs.vulkan-version }}
+        vulkan-use-cache: true
+        vulkan-components: 'Vulkan-Headers, Vulkan-Loader'
+
+    - name: Install full Vulkan SDK (macOS)
+      if: inputs.vulkan == 'true' && runner.os == 'macOS'
+      uses: humbletim/install-vulkan-sdk@30ba978f977e81b72d091fc8888feb1fb26f9aff # v1.2
+      with:
+        version: ${{ inputs.vulkan-version }}
+        cache: true
+
+    - name: Add MSBuild to PATH
+      if: inputs.msbuild == 'true' && runner.os == 'Windows'
+      uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+
+    - name: Select Xcode ${{ inputs.xcode-version }}
+      if: inputs.xcode-version != '' && runner.os == 'macOS'
+      uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+      with:
+        xcode-version: ${{ inputs.xcode-version }}

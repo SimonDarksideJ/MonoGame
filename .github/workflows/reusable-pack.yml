@@ -1,0 +1,82 @@
+name: reusable-pack
+
+# Reusable packaging block. Interface defined in Phase A; behaviour arrives in Phase D.
+#
+# Target behaviour (baseline report, sections 5.2 and 11.2): take the compiled outputs of every build job,
+# produce each NuGet package exactly once with all runtimes present, run validation (runtimes present,
+# dependency rules, stable-version rules, symbols, template new/build/run) and emit a manifest listing
+# every file, version and destination. That manifest is the review artefact for a release dry run.
+#
+# Today this block only gathers the build outputs and writes the manifest, so the lanes can be wired and
+# the artifact flow measured before any packing logic moves out of the per-OS build jobs.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Package version the manifest records.
+        type: string
+        required: true
+      stable:
+        description: Treat the version as stable (enables the NU5104-style preflight once implemented).
+        type: boolean
+        default: false
+      retention-days:
+        type: number
+        default: 7
+
+jobs:
+  pack:
+    name: pack ${{ inputs.version }}${{ inputs.stable && ' (stable rules)' || '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Download native libraries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-*
+          path: inputs/native
+
+      - name: Download managed outputs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: managed-*
+          path: inputs/managed
+
+      - name: Download packages
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: nuget-*
+          path: inputs/nuget
+
+      - name: Write manifest
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          STABLE: ${{ inputs.stable }}
+        run: |
+          mkdir -p out
+          find inputs -type f -printf '%s\t%p\n' | sort -k2 \
+            | jq -R -s --arg version "$VERSION" --argjson stable "$STABLE" '
+                split("\n") | map(select(length > 0) | split("\t") | {size: (.[0] | tonumber), path: .[1]})
+                | {version: $version, stable: $stable, generated: (now | todate), files: .}' \
+            > out/manifest.json
+          count=$(jq '.files | length' out/manifest.json)
+          bytes=$(jq '[.files[].size] | add // 0' out/manifest.json)
+          {
+            echo "### Pack manifest for $VERSION"
+            echo
+            echo "Files gathered: $count. Total size: $((bytes / 1024 / 1024)) MB."
+            echo
+            echo "Packing, validation and the stable-version preflight are Phase D work; this job only records what the build produced."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pack-manifest-${{ inputs.version }}
+          path: out/manifest.json
+          retention-days: ${{ inputs.retention-days }}
