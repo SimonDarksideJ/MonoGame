@@ -1,0 +1,140 @@
+{
+  "$comment": [
+    "Test placement manifest. Which framework test suites run on which backend, tier and runner class.",
+    ".github/scripts/run-tests.sh reads this file; the lane workflows only say which tiers and backends a job covers.",
+    "Placement follows section 5.2 of the automation baseline report: a suite runs on the cheapest runner class that",
+    "satisfies its requirement. Every suite carries the reason for its tier so the port can be checked line by line.",
+    "Tiers: fast (no device), windowed (a window plus a software renderer: xvfb+Mesa on Linux, WARP on Windows),",
+    "software-gpu (Mesa llvmpipe / lavapipe; populated by the Phase C measurement pass), hardware (a real GPU or audio",
+    "device: self-hosted only), quarantine (known broken; never run, listed so it is not forgotten).",
+    "Runner classes: hosted-linux, hosted-linux-arm64, hosted-windows, hosted-macos, selfhosted-windows, selfhosted-macos.",
+    "Suite fields: id, tier, backends, reason, and one of test (NUnitLite --test), where (NUnitLite --where) or filter",
+    "(dotnet test --filter when runner is dotnet-test); optional runners (restrict to classes), skip (os or arch names),",
+    "timeout (ms, default 300000), labels (NUnitLite --labels)."
+  ],
+  "backends": {
+    "desktopgl":   { "description": "Managed SDL2 + OpenGL (MojoShader)", "payload": "tests-desktopgl" },
+    "desktopgl4":  { "description": "Native OpenGL runtime",               "payload": "tests-desktopgl4", "skip": ["arm64"] },
+    "desktopvk":   { "description": "Native Vulkan runtime",               "payload": "tests-desktopvk" },
+    "windowsdx":   { "description": "Managed DirectX 11",                  "payload": "tests-windowsdx",   "os": ["windows"] },
+    "windowsdx12": { "description": "Native DirectX 12",                   "payload": "tests-windowsdx12", "os": ["windows"] }
+  },
+  "suites": [
+    {
+      "id": "framework-core", "tier": "fast", "backends": ["desktopgl"],
+      "test": "MonoGame.Tests.Framework", "where": "Category != Audio && Category != GameTest",
+      "reason": "Core, maths, content and Game-class unit tests need no device. main.yml ran these on hosted Linux and the self-hosted machines; hosted Windows is new coverage to measure."
+    },
+    {
+      "id": "storage", "tier": "windowed", "backends": ["desktopvk", "desktopgl4", "windowsdx12"],
+      "where": "Category == Storage",
+      "reason": "Needs a window and a device context, which xvfb + Mesa and WARP provide. Ran twice per run in main.yml (build job and test job); now once."
+    },
+    {
+      "id": "input", "tier": "windowed", "backends": ["desktopgl"],
+      "test": "MonoGame.Tests.Input",
+      "reason": "Needs a window only. Ran on every test runner in main.yml."
+    },
+    {
+      "id": "visual", "tier": "windowed", "backends": ["desktopgl"],
+      "test": "MonoGame.Tests.Visual",
+      "reason": "Frame-capture tests against a software renderer. Ran on every test runner in main.yml."
+    },
+    {
+      "id": "gametest", "tier": "windowed", "backends": ["desktopgl"],
+      "where": "Category == GameTest",
+      "reason": "Runs a Game loop in a window. main.yml ran it on hosted Linux and self-hosted only; hosted Windows is new coverage to measure."
+    },
+
+    {
+      "id": "audio", "tier": "hardware", "backends": ["desktopgl"],
+      "test": "MonoGame.Tests.Audio",
+      "reason": "Needs an audio device. Candidate for a virtual sink on hosted runners (S-1)."
+    },
+
+    { "id": "graphics-blendstate",         "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.BlendStateTest",         "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-depthstencilstate",  "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.DepthStencilStateTest",  "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-effect",             "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.EffectTest",             "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-graphicsadapter",    "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.GraphicsAdapterTest",    "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-indexbuffer",        "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.IndexBufferTest",        "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-miscellaneous",      "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.MiscellaneousTests",     "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-model",              "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.ModelTest",              "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-occlusionquery",     "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.OcclusionQueryTest",     "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-rasterizerstate",    "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.RasterizerStateTest",    "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-rendertarget2d",     "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.RenderTarget2DTest",     "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-rendertargetcube",   "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.RenderTargetCubeTest",   "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-samplerstate",       "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.SamplerStateTest",       "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4). Flaked on the 3.8.6 release run." },
+    { "id": "graphics-scissorrectangle",   "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.ScissorRectangleTest",   "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-shader",             "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.ShaderTest",             "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-spritebatch",        "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.SpriteBatchTest",        "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-spritefont",         "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.SpriteFontTest",         "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-texture2dnonvisual", "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.Texture2DNonVisualTest", "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-texture2d",          "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.Texture2DTest",          "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-texture3dnonvisual", "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.Texture3DNonVisualTest", "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-texture3d",          "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.Texture3DTest",          "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-texturecube",        "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.TextureCubeTest",        "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-vertexbuffer",       "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.VertexBufferTest",       "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+    { "id": "graphics-viewport",           "tier": "hardware", "backends": ["desktopgl"], "test": "MonoGame.Tests.Graphics.ViewportTest",           "reason": "Graphics fixture; self-hosted only in main.yml until measured on llvmpipe/WARP (R-4)." },
+
+    {
+      "id": "graphics-graphicsdevice", "tier": "quarantine", "backends": ["desktopgl"],
+      "test": "MonoGame.Tests.Graphics.GraphicsDeviceTest",
+      "reason": "Commented out in main.yml for every runner because it hangs on macOS (K-10). Needs an owner and an issue before it returns to a tier."
+    },
+
+    {
+      "id": "vk-audio-song", "tier": "hardware", "backends": ["desktopvk"],
+      "where": "Category == Audio || Category == Song", "labels": "Before",
+      "reason": "Audio device required. Same grouping as main.yml."
+    },
+    {
+      "id": "vk-graphicsdevice", "tier": "hardware", "backends": ["desktopvk"],
+      "where": "Category == GraphicsDevice", "labels": "Before",
+      "reason": "Device-level Vulkan behaviour; real driver required."
+    },
+    {
+      "id": "vk-memorylifecycle", "tier": "hardware", "backends": ["desktopvk"],
+      "where": "Category == MemoryLifeCycle", "labels": "Before",
+      "reason": "Device-level Vulkan behaviour; real driver required."
+    },
+    {
+      "id": "vk-rest", "tier": "hardware", "backends": ["desktopvk"],
+      "where": "Category != Audio && Category != Song && Category != GraphicsDevice && Category != MemoryLifeCycle && Category != Storage",
+      "timeout": 600000, "labels": "Before",
+      "reason": "Everything else on the Vulkan backend; candidate for lavapipe in Phase C. Storage is excluded because the windowed tier already runs it."
+    },
+
+    {
+      "id": "dx12-audio-song", "tier": "hardware", "backends": ["windowsdx12"],
+      "where": "Category == Audio || Category == Song",
+      "reason": "Audio device required. Same grouping as main.yml."
+    },
+    {
+      "id": "dx12-graphicsdevice", "tier": "hardware", "backends": ["windowsdx12"],
+      "where": "Category == GraphicsDevice",
+      "reason": "Device-level DX12 behaviour; real driver required (WARP to be measured in Phase C)."
+    },
+    {
+      "id": "dx12-memorylifecycle", "tier": "hardware", "backends": ["windowsdx12"],
+      "where": "Category == MemoryLifeCycle",
+      "reason": "Device-level DX12 behaviour; real driver required."
+    },
+    {
+      "id": "dx12-rest", "tier": "hardware", "backends": ["windowsdx12"],
+      "where": "Category != Audio && Category != Song && Category != GraphicsDevice && Category != MemoryLifeCycle && Category != Storage",
+      "timeout": 600000,
+      "reason": "Everything else on the DX12 backend; candidate for WARP in Phase C. Storage is excluded because the windowed tier already runs it."
+    },
+
+    {
+      "id": "dx11-audio", "tier": "hardware", "backends": ["windowsdx"], "runner": "dotnet-test",
+      "filter": "Category=Audio",
+      "reason": "main.yml runs WindowsDX through dotnet test in two halves because Audio clashes with ContentManagerTests in one process."
+    },
+    {
+      "id": "dx11-rest", "tier": "hardware", "backends": ["windowsdx"], "runner": "dotnet-test",
+      "filter": "Category!=Audio",
+      "reason": "Second half of the WindowsDX run; real DX11 driver required until WARP is measured."
+    }
+  ]
+}

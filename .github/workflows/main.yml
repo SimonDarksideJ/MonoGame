@@ -1,6 +1,12 @@
+# DISABLED for the automation rebuild (October 2026).
+# This is the legacy single-workflow pipeline. Its push and pull_request triggers are switched off while
+# the new lanes (pr.yml, ci.yml, nightly.yml, release.yml) are tested in stages; see README.md here.
+# It can still be started by hand from the Actions tab for a side-by-side comparison. Nothing else in
+# this file has changed. To re-enable, restore:  on: [push, pull_request]
 name: Build
 
-on: [push, pull_request]
+on:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.ref }}

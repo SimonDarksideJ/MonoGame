@@ -1,0 +1,145 @@
+name: Nightly
+
+# Nightly lane (Phase A skeleton). Everything the merge lane does, plus the checks that are too expensive
+# for every merge (baseline report, S-3): full template matrix, mobile emulator smoke, package size
+# budget, dependency audit. Those extras are placeholders until Phase D.
+#
+# The schedule is commented out for the staged test so nothing runs unattended in the fork. Dispatch it
+# by hand from the Actions tab; enable the cron when the lane has proven itself.
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '0 3 * * *'   # 03:00 UTC daily
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  build-linux:
+    name: Build
+    uses: ./.github/workflows/_build.yml
+    with:
+      runner: ubuntu-24.04
+      profile: full
+      run-tools-tests: true
+      upload-packages: true
+      retention-days: 14
+
+  build-windows:
+    name: Build
+    uses: ./.github/workflows/_build.yml
+    with:
+      runner: windows-2022
+      profile: full
+      run-tools-tests: true
+      upload-packages: true
+      retention-days: 14
+
+  build-macos:
+    name: Build
+    uses: ./.github/workflows/_build.yml
+    with:
+      runner: macos-26
+      profile: full
+      run-tools-tests: true
+      upload-packages: true
+      retention-days: 14
+
+  natives-linux-arm64:
+    name: Build
+    uses: ./.github/workflows/_build.yml
+    with:
+      runner: ubuntu-24.04-arm
+      profile: natives
+      retention-days: 14
+      timeout-minutes: 45
+
+  tests-linux:
+    name: Test
+    needs: build-linux
+    uses: ./.github/workflows/_test.yml
+    with:
+      runner: ubuntu-24.04
+      runner-class: hosted-linux
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopgl4", "desktopvk"]'
+      payload-suffix: linux-x64
+
+  tests-linux-arm64:
+    name: Test
+    needs: build-linux
+    uses: ./.github/workflows/_test.yml
+    with:
+      runner: ubuntu-24.04-arm
+      runner-class: hosted-linux-arm64
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopvk"]'
+      payload-suffix: linux-x64
+
+  tests-windows:
+    name: Test
+    needs: build-windows
+    uses: ./.github/workflows/_test.yml
+    with:
+      runner: windows-2022
+      runner-class: hosted-windows
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopgl4", "desktopvk", "windowsdx12"]'
+      payload-suffix: windows-x64
+
+  tests-macos:
+    name: Test
+    needs: build-macos
+    uses: ./.github/workflows/_test.yml
+    with:
+      runner: macos-26
+      runner-class: hosted-macos
+      tiers: '["fast", "windowed"]'
+      backends: '["desktopgl", "desktopgl4", "desktopvk"]'
+      payload-suffix: macos-arm64
+
+  tests-hardware-windows:
+    name: Test (hardware)
+    needs: build-windows
+    if: vars.MG_ENABLE_HARDWARE_TIER == 'true'
+    uses: ./.github/workflows/_test.yml
+    with:
+      runner: windows-selfhosted-latest
+      runner-class: selfhosted-windows
+      tiers: '["hardware"]'
+      backends: '["desktopgl", "desktopvk", "windowsdx", "windowsdx12"]'
+      payload-suffix: windows-x64
+      timeout-minutes: 45
+
+  tests-hardware-macos:
+    name: Test (hardware)
+    needs: build-macos
+    if: vars.MG_ENABLE_HARDWARE_TIER == 'true'
+    uses: ./.github/workflows/_test.yml
+    with:
+      runner: macos-selfhosted-15
+      runner-class: selfhosted-macos
+      tiers: '["hardware"]'
+      backends: '["desktopgl", "desktopvk"]'
+      payload-suffix: macos-arm64
+      timeout-minutes: 45
+
+  pack:
+    name: Pack
+    needs: [build-linux, build-windows, build-macos, natives-linux-arm64]
+    uses: ./.github/workflows/_pack.yml
+    with:
+      version: 0.0.0-nightly.${{ github.run_number }}
+      stable: false
+      retention-days: 14
+
+  # Phase D placeholders. Each becomes a job here once the pack block produces real packages:
+  #   template-matrix   dotnet new / build / run for every template on every OS from the packed feed
+  #   aot-publish       trimmed and AOT publish of the DesktopGL and Native templates (issue #8922)
+  #   mobile-smoke      Android emulator and iOS simulator boot of a template game
+  #   size-budget       package size and stripped-binary check (issue #9502)
